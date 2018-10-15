@@ -1,12 +1,14 @@
+import datetime
 import sys
 
-import datetime
+from django.contrib.auth.models import User
 from django.core.validators import RegexValidator
-from django.db import models, IntegrityError
+from django.db import models
 
 # Create your models here.
 
 status_choice = (('0', '未使用'), ('1', '使用中'), ('2', '已失效'))
+user_status_choice = (('0', '未审核'), ('1', '已审核'), ('2', '已失效'))
 
 
 # 人员信息
@@ -17,36 +19,23 @@ def user_directory_path(instance, filename):
                                                   time=datetime.datetime.today().strftime('%Y_%m_%d_%H_%M_%S'))
 
 
-class EmployeeInfo(models.Model):
+class EmployeeInfo(User):
     # emp_status_choice = (('0', '已离职'), ('1', '在职'), ('2', '试用'), ('3', '实习'))
-
+    # 继承 User 在导入或新增的时候，能直接实现数据查看
+    #  可以看到用户密码 的加密
     # 表的结构:
     name = models.CharField('姓名', max_length=10)
     code = models.CharField('工号', max_length=10, validators=[RegexValidator(r'^[\d]{10}')], unique=True)
-    # TODO 排班时，需要做筛选
+    #  排班时，需要做筛选，使用书签实现
     level = models.CharField('级别', max_length=10, )
     emp_status = models.CharField('员工状态', max_length=4, )
+    pwd_status = models.BooleanField('密码是否修改')
 
     def __str__(self):
         return self.name
 
     class Meta:
-        verbose_name = '员工基础信息'
-        verbose_name_plural = verbose_name
-
-
-class EmployeeInfoImport(models.Model):
-    # 表的结构:
-    # path_name = models.FileField('文件名称', upload_to=sys.path[0] + '/upload/%Y_%m_%d/%H', )
-    path_name = models.FileField('文件名称', upload_to=user_directory_path, )
-    #  获取现在的时间
-    upload_time = models.DateTimeField('上传时间', unique=True, auto_now=True)
-
-    def __str__(self):
-        return str(self.id)
-
-    class Meta:
-        verbose_name = '人员信息导入'
+        verbose_name = '员工基本信息'
         verbose_name_plural = verbose_name
 
 
@@ -75,12 +64,11 @@ class OriginalCardImport(models.Model):
         return str(self.id)
 
     class Meta:
-        verbose_name = '原始考勤数据导入'
+        verbose_name = '考勤数据导入'
         verbose_name_plural = verbose_name
 
 
 # 班次
-# TODO 排班规则
 class ShiftsInfo(models.Model):
     # type_shift_choice = (('0', '节假日'), ('1', '工作日'))
     # TODO 在admin的删除动作中实现标记为失效
@@ -135,7 +123,7 @@ class EmployeeSchedulingInfo(models.Model):
         return str(self.emp)
 
     class Meta:
-        verbose_name = '人员排班信息'
+        verbose_name = '人员排班查看'
         verbose_name_plural = verbose_name
         unique_together = ('emp', 'attendance_date')
 
@@ -151,7 +139,7 @@ class AttendanceExceptionStatus(models.Model):
         return self.exception_name
 
     class Meta:
-        verbose_name = '考勤状态'
+        verbose_name = '考勤状态类型'
         verbose_name_plural = verbose_name
 
 
@@ -174,10 +162,10 @@ class EditAttendanceType(AttendanceExceptionStatus):
     #     super(EditAttendanceType, self).save(*args, **kwargs) # Call the "real" save() method.
 
     class Meta:
-        verbose_name = '签卡原因'
+        verbose_name = '签卡类型'
         verbose_name_plural = verbose_name
 
-
+#  约束条件应为 edit_attendance_date 中的上午下午不能存在重复值
 class EditAttendance(models.Model):
     emp = models.ForeignKey(EmployeeInfo, to_field='code', on_delete=models.CASCADE, verbose_name='工号')
     edit_attendance_date = models.DateField('签卡日期')
@@ -188,21 +176,31 @@ class EditAttendance(models.Model):
                                              to_field='attendanceexceptionstatus_ptr',
                                              limit_choices_to={'exception_status': '1'}, verbose_name='签卡原因')
     #  单据状态
-    edit_attendance_status = models.CharField('签卡单据状态', max_length=2, choices=status_choice)
+    edit_attendance_status = models.CharField('签卡单据状态', max_length=2, choices=user_status_choice)
     edit_attendance_operate = models.DateTimeField('操作日期', auto_now=True)
 
     def __str__(self):
         return str(self.emp)
 
     def save(self, *args, **kwargs):
+        try:
+            if (EditAttendance.objects.get(pk=self.pk) == self) is False:
+                # 需要先验证，才能选择是否保存
+                from Attendance.views import edit_attendance_distinct
+                edit_attendance_distinct(self)
+        except EditAttendance.DoesNotExist:
+            # 需要先验证，才能选择是否保存
+            from Attendance.views import edit_attendance_distinct
+            edit_attendance_distinct(self)
         super(EditAttendance, self).save(*args, **kwargs)  # Call the "real" save() method.
+        # 自动计算
         from Attendance.views import attendance_cal
         attendance_cal((self.emp,), self.edit_attendance_date, self.edit_attendance_date)
 
     class Meta:
-        verbose_name = '签卡信息'
+        verbose_name = '签卡信息维护'
         verbose_name_plural = verbose_name
-        unique_together = ('emp', 'edit_attendance_date', 'edit_attendance_status')
+        # unique_together = ('emp', 'edit_attendance_date', 'edit_attendance_status')
 
 
 # 5. 请假（请假单、请假拆分）
@@ -236,12 +234,12 @@ class LeaveInfo(models.Model):
     # 表的结构:
     emp = models.ForeignKey(EmployeeInfo, to_field='code', on_delete=models.CASCADE, verbose_name='工号')
     start_date = models.DateField('开始日期')
-    leave_info_time_start = models.TimeField('开始请假时间', )
+    leave_info_time_start = models.TimeField('请假开始时间', )
     end_date = models.DateField('结束日期')
-    leave_info_time_end = models.TimeField('结束请假时间', )
+    leave_info_time_end = models.TimeField('请假结束时间', )
     leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, to_field='attendanceexceptionstatus_ptr',
                                    limit_choices_to={'exception_status': '1'}, verbose_name='假期类型')
-    leave_info_status = models.CharField('假期单据状态', max_length=2, choices=status_choice)
+    leave_info_status = models.CharField('假期单据状态', max_length=2, choices=user_status_choice)
     # TODO 审批人
     leave_info_operate = models.DateTimeField('假期操作日期', auto_now=True)
 
@@ -252,17 +250,28 @@ class LeaveInfo(models.Model):
         #
         if self.start_date <= self.end_date:
             try:
+                if (LeaveInfo.objects.get(pk=self.pk) == self) is False:
+                    super(LeaveInfo, self).save(*args, **kwargs)  # Call the "real" save() method.
+                    # 保存之后才能拆分
+                    # 拆分单据，有重复则报错
+                    from Attendance.views import leave_split_cal
+                    leave_split_cal((self,))
+                    # 自动计算
+            except LeaveInfo.DoesNotExist:
                 super(LeaveInfo, self).save(*args, **kwargs)  # Call the "real" save() method.
-                from Attendance.views import attendance_cal
-                attendance_cal((self.emp,), self.start_date, self.end_date)
-            except IntegrityError:
-                raise UserWarning('无效')
-                pass
+                # 保存之后才能拆分
+                # 拆分单据，有重复则报错
+                from Attendance.views import leave_split_cal
+                leave_split_cal((self,))
+            from Attendance.views import attendance_cal
+            attendance_cal((self.emp,), self.start_date, self.end_date)
+            # except IntegrityError:
+            #     raise UserWarning('无效')
         else:
             raise UserWarning('开始日期必须要大于结束日期')
 
     class Meta:
-        verbose_name = '请假信息'
+        verbose_name = '假期信息维护'
         verbose_name_plural = verbose_name
 
 
@@ -273,7 +282,7 @@ class LeaveDetail(models.Model):
     leave_detail_time_start = models.TimeField('上午请假时间', null=True, blank=True)
     leave_detail_time_end = models.TimeField('下午请假时间', null=True, blank=True)
     leave_type = models.ForeignKey(LeaveType, to_field='exception_name', on_delete=models.CASCADE, verbose_name='假期类型')
-    leave_info_status = models.CharField('假期单据状态', max_length=2, choices=status_choice)
+    leave_info_status = models.CharField('假期明细单据状态', max_length=2, choices=status_choice)
     leave_detail_operate = models.DateTimeField('假期明细操作日期', auto_now=True)
 
     def __str__(self):
@@ -282,7 +291,8 @@ class LeaveDetail(models.Model):
     class Meta:
         verbose_name = '假期明细'
         verbose_name_plural = verbose_name
-        unique_together = ('emp', 'leave_date', 'leave_info_status')
+        #  约束条件应为 leave_date 中的上午下午不能存在重复值
+        # unique_together = ('emp', 'leave_date', 'leave_info_status')
 
     pass
 
@@ -310,8 +320,8 @@ class AttendanceInfo(models.Model):
                                       verbose_name='上班打卡状态', related_name='check_in_type')
     check_out_type = models.ForeignKey(AttendanceExceptionStatus, to_field='exception_name', on_delete=models.CASCADE,
                                        verbose_name='下班打卡状态', related_name='check_out_type')
-    check_in_status = models.CharField(verbose_name='上午考勤状态', max_length=1, choices=check_status_choice)
-    check_out_status = models.CharField(verbose_name='下午考勤状态', max_length=1, choices=check_status_choice)
+    check_in_status = models.CharField(verbose_name='上午出勤情况', max_length=1, choices=check_status_choice)
+    check_out_status = models.CharField(verbose_name='下午出勤情况', max_length=1, choices=check_status_choice)
     check_status = models.BooleanField('是否异常')
     attendance_date_status = models.BooleanField('是否工作日')
 
@@ -322,14 +332,14 @@ class AttendanceInfo(models.Model):
         return str(self.emp)
 
     class Meta:
-        verbose_name = '考勤信息'
+        verbose_name = '考勤明细查看'
         verbose_name_plural = verbose_name
         unique_together = ('emp', 'attendance_date')
 
 
 class AttendanceTotal(models.Model):
     emp_code = models.CharField('工号', max_length=10, validators=[RegexValidator(r'^[\d]{10}')], )
-    emp_name = models.ForeignKey(EmployeeInfo, to_field='name', on_delete=models.CASCADE, verbose_name='姓名',
+    emp_name = models.ForeignKey(EmployeeInfo, to_field='code', on_delete=models.CASCADE, verbose_name='姓名',
                                  related_name='emp_name')
     section_date = models.CharField('汇总区间', max_length=6, validators=[RegexValidator(r'^[\d]{6}')])
     arrive_total = models.FloatField('应到天数', )
@@ -349,7 +359,7 @@ class AttendanceTotal(models.Model):
     other_leave_total = models.FloatField('其他假天数', )
 
     class Meta:
-        verbose_name = '考勤汇总'
+        verbose_name = '考勤信息汇总'
         verbose_name_plural = verbose_name
         unique_together = ('emp_name', 'section_date')
 

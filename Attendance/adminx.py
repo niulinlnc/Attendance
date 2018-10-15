@@ -6,13 +6,14 @@ from xadmin.plugins.actions import BaseActionView
 from xadmin.plugins.utils import get_context_dict
 from xadmin.views import CommAdminView, BaseAdminPlugin
 
-from Attendance.forms import DateSelectForm, ShiftsInfoDateForm
+from Attendance.forms import DateSelectForm, ShiftsInfoDateForm, EditAttendanceForm, LeaveInfoForm
 from Attendance.models import EmployeeInfo, OriginalCard, ShiftsInfo, EmployeeSchedulingInfo, EditAttendanceType, \
-    EditAttendance, LeaveType, LeaveInfo, AttendanceExceptionStatus, AttendanceInfo, EmployeeInfoImport, \
-    OriginalCardImport, LegalHoliday, AttendanceTotal
-from Attendance.resources import EmployeeInfoResource, OriginalCardResource
-from Attendance.views import get_path, loading_data, ShareContext, attendance_total_cal, form_select, attendance_cal, \
-    shift_swap, cal_scheduling_info
+    EditAttendance, LeaveType, LeaveInfo, AttendanceExceptionStatus, AttendanceInfo, OriginalCardImport, LegalHoliday, \
+    AttendanceTotal
+from Attendance.resources import EmployeeInfoResource, OriginalCardResource, EditAttendanceTypeResource, \
+    LeaveTypeResource, EditAttendanceResource, LeaveInfoResource
+from Attendance.views import get_path, ShareContext, attendance_total_cal, form_select, attendance_cal, shift_swap, \
+    cal_scheduling_info, original_card_import
 
 
 class SelectedShiftsInfoAction(BaseActionView):
@@ -49,7 +50,7 @@ class ShiftSelectAction(BaseActionView):
     def do_action(self, queryset):
         context = self.get_context()
         self.message_user("选择要交换的日期")
-        ShareContext(context=context, path=self.request.path, query_list=queryset, form=DateSelectForm, title='考勤计算',
+        ShareContext(context=context, path=self.request.path, query_list=queryset, form=DateSelectForm, title='调班',
                      templates='Attendance/selected.html', callback=shift_swap,
                      argument_dict={one: "" for one in DateSelectForm.base_fields})
         return redirect(form_select)
@@ -116,26 +117,13 @@ class ImportMenuPlugin(BaseAdminPlugin):
 @xadmin.sites.register(EmployeeInfo)
 class EmployeeInfoAdmin(object):
     import_export_args = {'import_resource_class': EmployeeInfoResource, }
-    list_display = ('code', 'name', 'level', 'emp_status')
-    list_filter = ('level', 'emp_status',)
+    list_display = ('code', 'name', 'level', 'emp_status', 'pwd_status')
+    list_filter = ('level', 'emp_status', 'pwd_status')
     search_fields = ('name', 'code',)
     actions = [SelectedShiftsInfoAction, ShiftSelectAction, CalAttendanceAction, CalAttendanceTotalAction, ]
-
-    pass
-
-
-@xadmin.sites.register(EmployeeInfoImport)
-class EmployeeInfoImportAdmin(object):
-    actions = ['upload_loading', ]
-
-    def upload_loading(self, request, queryset):
-        path = get_path(queryset)
-        name_list = loading_data(path, EmployeeInfo)
-        if len(name_list):
-            self.message_user("{num}没有导入成功,{name}".format(num=len(name_list),
-                                                          name='、'.join(sorted(set(name_list), key=name_list.index))))
-
-    upload_loading.short_description = '解析文件'
+    exclude = (
+    'first_name', 'last_name', 'email', 'is_staff', 'date_joined', 'last_login', 'is_active', 'is_superuser', 'groups',
+    'user_permissions')
     pass
 
 
@@ -144,7 +132,7 @@ class OriginalCardAdmin(object):
     import_export_args = {'import_resource_class': OriginalCardResource, }
     model = OriginalCard
     list_display = ('emp', 'attendance_card',)
-    # list_filter = ('level', 'emp_status', )
+    list_filter = ('emp__level', 'emp__emp_status', 'attendance_card')
     search_fields = ('emp__code', 'emp__name',)
     date_hierarchy = 'attendance_card'
 
@@ -154,13 +142,14 @@ class OriginalCardAdmin(object):
 @xadmin.sites.register(OriginalCardImport)
 class OriginalCardImportAdmin(object):
     actions = ['upload_loading', ]
+    list_display = ('id', 'path_name', 'upload_time',)
 
     def upload_loading(self, request, queryset):
         path = get_path(queryset)
-        name_list = loading_data(path, OriginalCard)
+        name_list = original_card_import(path)
         if len(name_list):
-            self.message_user("{num}没有导入成功,{name}".format(num=len(name_list),
-                                                          name='、'.join(sorted(set(name_list), key=name_list.index))))
+            self.message_user("{num}人的考勤没有导入成功,分别是{name}".format(num=len(name_list), name='、'.join(
+                sorted(set(name_list), key=name_list.index))))
 
     upload_loading.short_description = '解析文件'
     pass
@@ -168,9 +157,8 @@ class OriginalCardImportAdmin(object):
 
 @xadmin.sites.register(ShiftsInfo)
 class ShiftsInfoAdmin(object):
-    list_display = (
-    'name', 'type_shift', 'check_in', 'check_in_end', 'check_out_start', 'check_out', 'late_time', 'leave_early_time',
-    'absenteeism_time', 'status')
+    list_display = ('name', 'type_shift', 'check_in', 'check_in_end', 'check_out_start', 'check_out', 'late_time',
+                    'leave_early_time', 'absenteeism_time', 'status')
     pass
 
 
@@ -186,38 +174,52 @@ class LegalHolidayAdmin(object):
 class EmployeeSchedulingInfoAdmin(object):
     # actions = [SelectedShiftsInfoAction, ShiftSelectAction, ]
     list_display = ('emp', 'attendance_date', 'shifts_verbose_name')
-    list_filter = ('attendance_date',)
-    search_fields = ('emp__code', 'emp__name')
+    list_filter = ('attendance_date', 'emp__level', 'emp__emp_status')
+    search_fields = ('emp__code', 'emp__name', 'shifts_name__name')
     ordering = ('emp', 'attendance_date')
     pass
 
 
 @xadmin.sites.register(EditAttendanceType)
 class EditAttendanceTypeAdmin(object):
+    import_export_args = {'import_resource_class': EditAttendanceTypeResource, }
     pass
 
 
 @xadmin.sites.register(EditAttendance)
 class EditAttendanceAdmin(object):
     # actions = []
+    import_export_args = {'import_resource_class': EditAttendanceResource, }
     list_display = (
         'emp', 'edit_attendance_date', 'edit_attendance_time_start', 'edit_attendance_time_end', 'edit_attendance_type',
         'edit_attendance_status')
     list_filter = ('edit_attendance_type',)
     search_fields = ('emp__code', 'emp__name')
+    form = EditAttendanceForm
+
+    # def save_models(self):
+    #     try:
+    #         self.new_obj.save()
+    #     except UserWarning:
+    #         self.message_user('保存失败，原因为：{err}'.format(err=sys.exc_info()[1]),level='error',)
 
     pass
 
 
 @xadmin.sites.register(LeaveType)
 class LeaveTypeAdmin(object):
+    import_export_args = {'import_resource_class': LeaveTypeResource, }
     pass
 
 
 @xadmin.sites.register(LeaveInfo)
 class LeaveInfoAdmin(object):
-    list_display = ('emp', 'start_date', 'leave_info_time_start', 'end_date', 'leave_info_time_end', 'leave_type',
-                    'leave_info_status',)
+    import_export_args = {'import_resource_class': LeaveInfoResource, }
+    list_display = (
+    'emp', 'start_date', 'leave_info_time_start', 'end_date', 'leave_info_time_end', 'leave_type', 'leave_info_status',)
+    list_filter = ('leave_type', 'start_date', 'end_date')
+    search_fields = ('emp__code', 'emp__name')
+    form = LeaveInfoForm
     pass
 
 
@@ -247,7 +249,7 @@ class AttendanceTotalAdmin(object):
         'sick_leave_total', 'personal_leave_total', 'annual_leave_total', 'marriage_leave_total',
         'bereavement_leave_total', 'paternity_leave_total', 'maternity_leave_total', 'work_related_injury_leave_total',
         'home_leave_total', 'travelling_total', 'other_leave_total',)
-    list_filter = ('emp_code', 'emp_name', 'section_date',)
+    list_filter = ('emp_name__level', 'emp_name__emp_status', 'section_date',)
     search_fields = ('emp_name__code', 'emp_name__name')
     ordering = ('emp_code', 'section_date')
 
