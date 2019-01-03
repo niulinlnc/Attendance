@@ -1,5 +1,11 @@
 from import_export import resources
-from .models import EmployeeInfo, OriginalCard, EditAttendanceType, LeaveType, EditAttendance, LeaveInfo
+from .models import EmployeeInfo, OriginalCard, EditAttendanceType, LeaveType, EditAttendance, LeaveInfo, LevelStatus, \
+    LimitStatus, Limit
+
+
+class LevelStatusResource(resources.ModelResource):
+    class Meta:
+        model = LevelStatus
 
 
 class EmployeeInfoResource(resources.ModelResource):
@@ -30,3 +36,13 @@ class LeaveTypeResource(resources.ModelResource):
 class LeaveInfoResource(resources.ModelResource):
     class Meta:
         model = LeaveInfo
+
+
+class LimitStatusResource(resources.ModelResource):
+    class Meta:
+        model = LimitStatus
+
+
+class LimitResource(resources.ModelResource):
+    class Meta:
+        model = Limit
